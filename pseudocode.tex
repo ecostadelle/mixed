@@ -1,0 +1,27 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage[linesnumbered,ruled]{algorithm2e}
+
+\begin{document}
+\begin{algorithm}
+    \SetKwInOut{Input}{Input}
+    \SetKwInOut{Output}{Output}
+
+ %   \underline{function Euclid} $(a,b)$\;
+    \Input{Two datasets $\mathcal{D}^{a} = \left\{ (X_1^a, y_1^a), (X_2^a, y_2^a) \dots (X_n^a, y_n^a) \right\} $ and $\mathcal{D}^{b} = \left\{ X_1^b, X_2^b \dots X_n^b \right\} $}
+ %   \Output{$\gcd(a,b)$}
+ \Theta =    
+ $X = X^a$ \\
+    $y = \textbf{y}^a$ \\
+    \ForEach{$s \in \mathcal{S}$}{print $s$}
+
+    \eIf{$b=0$}
+      {
+        return $a$\;
+      }
+      {
+        return Euclid$(b,a\mod b)$\;
+      }
+%    \caption{Euclid's algorithm for finding the greatest common divisor of two nonnegative integers}
+\end{algorithm}
+\end{document} 

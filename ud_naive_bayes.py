@@ -3,8 +3,9 @@
 
 
 import numpy as np
+import pandas as pd
 from scipy.special import logsumexp
-from sklearn.naive_bayes import GaussianNB, BernoulliNB, _BaseDiscreteNB
+from sklearn.naive_bayes import GaussianNB, BernoulliNB, _BaseDiscreteNB, CategoricalNB, MultinomialNB
 #from sklearn.utils import _deprecate_positional_args
 from sklearn.utils.extmath import safe_sparse_dot
 from sklearn.utils.validation import check_is_fitted
@@ -322,3 +323,310 @@ class InterpretableBernoulliNB(BernoulliNB):
         log_prob_x = logsumexp(jll, axis=1)
         return np.exp(jll - np.atleast_2d(log_prob_x).T)
 
+class InterpretableMultinomialNB(MultinomialNB):
+
+#    @_deprecate_positional_args
+    def __init__(self, *, alpha=1.0, fit_prior=True, class_prior=None):
+        self.alpha = alpha
+        self.fit_prior = fit_prior
+        self.class_prior = class_prior
+
+    @property
+    def feature_importances_(self):
+        check_is_fitted(self)
+
+        return self.compute_feature_importances_()
+
+    def compute_feature_importances_(self, normalize=True):
+        """Computes the importance of each feature (aka variable)."""
+        feature_prob = np.exp(self.feature_log_prob_)
+        importances = np.abs(feature_prob[0] - feature_prob[1])
+
+        if normalize:
+            normalizer = np.sum(importances)
+
+            if normalizer > 0.0:
+                importances /= normalizer
+
+        return importances
+
+    def sufficiency_based_feature_importances(self, X, normalize=True):
+        """Computes the importance of each feature (aka variable) based on its `sufficiency` for the examples in X."""
+        X = self._check_X(X)
+        minimal_sufficient = self.minimal_sufficient_features(X)
+        importances = np.count_nonzero(minimal_sufficient, axis=0) / X.shape[0]
+        # cardinalities = np.count_nonzero(minimal_sufficient, axis=1)
+        # unique, indices, counts = np.unique(minimal_sufficient, axis=0, return_index=True, return_counts=True)
+        # print('Inst\tFreq\tCard')
+        # for i in range(unique.shape[0]):
+        #     print(indices[i], '\t', counts[i], '\t', cardinalities[indices[i]])
+
+        if normalize:
+            normalizer = np.sum(importances)
+
+            if normalizer > 0.0:
+                importances /= normalizer
+
+        return importances
+
+    def minimal_sufficient_features(self, X):
+        """Returns a `minimal sufficient` set of features for each example in X."""
+        X = self._check_X(X)
+        y = self.predict(X)
+        minimal_sufficient = self.supporting_features(X, y)
+        sorted_indices = np.argsort(self.feature_importances_)
+        for i in range(X.shape[0]):
+            for j in sorted_indices:
+                if minimal_sufficient[i, j]:
+                    minimal_sufficient[i, j] = False
+                    jll = self.reduced_joint_log_likelihood(X[i], minimal_sufficient[i])
+                    if self.classes_[np.argmax(jll)] != y[i]:
+                        minimal_sufficient[i, j] = True
+                        break
+
+        return minimal_sufficient
+
+    def supporting_features(self, X, y):
+        """Returns the `supporting` features for each example in X, given the corresponding classes in y."""
+        support_features = np.empty(X.shape, dtype=np.bool)
+        feature_prob = np.exp(self.feature_log_prob_)
+        for i in range(X.shape[0]):
+            for j in range(X.shape[1]):
+                if X[i, j] == 1:
+                    support_features[i, j] = feature_prob[y[i], j] > feature_prob[1 - y[i], j]
+                else:
+                    support_features[i, j] = 1 - feature_prob[y[i], j] > 1 - feature_prob[1 - y[i], j]
+
+        return support_features
+
+    def reduced_joint_log_likelihood(self, x, mask):
+        """Calculate the posterior log probability of the sample x considering a reduced model with the features
+        filtered by an index mask """
+        feature_log_prob = self.feature_log_prob_[:, mask]
+        x = x[mask]
+
+        neg_prob = np.log(1 - np.exp(feature_log_prob))
+        # Compute  neg_prob · (1 - X).T  as  ∑neg_prob - X · neg_prob
+        jll = safe_sparse_dot(x, (feature_log_prob - neg_prob).T)
+        jll += self.class_log_prior_ + neg_prob.sum(axis=1)
+
+        return jll
+    
+    
+class InterpretableCategoricalNB(CategoricalNB):
+
+#    @_deprecate_positional_args
+    def __init__(self, *, alpha=1.0, fit_prior=True, class_prior=None, min_categories=None, force_alpha=True):
+        self.alpha = alpha
+        self.fit_prior = fit_prior
+        self.class_prior = class_prior
+        self.min_categories = min_categories
+        self.force_alpha = force_alpha
+
+    @property
+    def feature_importances_(self):
+        check_is_fitted(self)
+
+        return self.compute_feature_importances_()
+
+    def compute_feature_importances_(self, normalize=True):
+        """Computes the importance of each feature (aka variable)."""
+        q = len(self.classes_)
+        m = self.n_features_in_
+        importances = np.zeros(m)
+        for j,f in enumerate(self.feature_log_prob_):
+            p = np.exp(f)
+            for r in range(q):
+                for s in range(r+1, q):
+                    importances[j] += np.abs(p[r] - p[s]).sum()
+        if normalize:
+            normalizer = np.sum(importances)
+
+            if normalizer > 0.0:
+                importances /= normalizer
+
+        return importances
+
+    def sufficiency_based_feature_importances(self, X, normalize=True):
+        """Computes the importance of each feature (aka variable) based on its `sufficiency` for the examples in X."""
+        X = self._check_X(X)
+        minimal_sufficient = self.minimal_sufficient_features(X)
+        importances = np.count_nonzero(minimal_sufficient, axis=0) / X.shape[0]
+        # cardinalities = np.count_nonzero(minimal_sufficient, axis=1)
+        # unique, indices, counts = np.unique(minimal_sufficient, axis=0, return_index=True, return_counts=True)
+        # print('Inst\tFreq\tCard')
+        # for i in range(unique.shape[0]):
+        #     print(indices[i], '\t', counts[i], '\t', cardinalities[indices[i]])
+
+        if normalize:
+            normalizer = np.sum(importances)
+
+            if normalizer > 0.0:
+                importances /= normalizer
+
+        return importances
+
+    def minimal_sufficient_features(self, X):
+        """Returns a `minimal sufficient` set of features for each example in X."""
+        X = self._check_X(X)
+        y = self.predict(X)
+        minimal_sufficient = self.supporting_features(X, y)
+        sorted_indices = np.argsort(self._dbcp(X).sum(axis=0))
+        for i in range(X.shape[0]):
+            for j in sorted_indices:
+                if minimal_sufficient[i, j]:
+                    minimal_sufficient[i, j] = False
+                    jll = self.reduced_joint_log_likelihood(X[i], minimal_sufficient[i])
+                    if self.classes_[np.argmax(jll)] != y[i]:
+                        minimal_sufficient[i, j] = True
+                        break
+
+        return minimal_sufficient
+
+    def supporting_features(self, X, y):
+        """Returns the `supporting` features for each example in X, given the corresponding classes in y."""
+        support_features = np.empty(X.shape, dtype=np.bool)
+        n,m = X.shape
+        for i in range(n):
+            for j in range(m):
+                support_features[i, j] = np.argmax(self.feature_log_prob_[j][:,X[i, j]]) == y[i]
+
+        return support_features
+    
+    def _dbcp(self, X, normalize=False):
+        """
+        The DBCP method calculates Difference Between Conditional 
+        Probabilities. It is a way to calculate the feature importances 
+        for each x_ij, based on its category.
+        """
+        n,m = X.shape
+        if isinstance(X, pd.DataFrame):
+            X = X.values
+        importances = np.zeros((n,m))
+        for j in range(m):
+            Xj = X[:, j].astype(int)
+            p = np.exp(self.feature_log_prob_[j])
+            # MISSINGVALUES - compute importance just for valid categories
+            valid = (Xj >= 0).astype(int)
+            importances[:,j] += np.abs(p[0] - p[1])[Xj]*valid
+        if normalize:
+            normalizer = np.sum(importances)
+
+            if normalizer > 0.0:
+                importances /= normalizer
+
+        return importances.sum(axis=0)
+
+    def _joint_log_likelihood(self, X):
+        self._check_n_features(X, reset=False)
+        q = len(self.classes_)
+        n,m = X.shape
+        jll = np.zeros((n, q))
+        for j in range(m):
+            Xj = X[:, j].astype(int)
+            # MISSINGVALUES - mask to preserve just valid values
+            valid_categories = Xj[Xj >= 0]
+            # MISSINGVALUES - pass if the feature likehood cant be calculated
+            try:
+                jll += self.feature_log_prob_[j][:, valid_categories].T
+            except:
+                pass
+        jll += self.class_log_prior_
+        return jll
+
+    def reduced_joint_log_likelihood(self, X, mask):
+        """Calculate the posterior log probability of the sample x considering a reduced model with the features
+        filtered by an index mask """
+        feature_log_prob = [x for i,x in enumerate(self.feature_log_prob_) if mask[i]]
+        X = X[mask]
+        
+        m = len(X)
+
+        jll = np.zeros(self.class_count_.shape[0])
+        for j in range(m):
+            jll += feature_log_prob[j][:, X[j]]
+            jll += self.class_log_prior_
+        return jll
+
+
+    # MISSINGVALUES - changed parameters: dtype=None, force_all_finite='allow-nan'
+    def _check_X(self, X):
+        """Validate X, used only in predict* methods."""
+        X = self._validate_data(
+            X, dtype=None, accept_sparse=False, force_all_finite='allow-nan', reset=False
+        )
+        # MISSINGVALUES pandas.CategoricalDtype encodes np.nan as -1
+        # check_non_negative(X, "CategoricalNB (input X)")
+        return X
+
+    # MISSINGVALUES - changed parameters: dtype=None, force_all_finite='allow-nan'
+    def _check_X_y(self, X, y, reset=True):
+        X, y = self._validate_data(
+            X, y, dtype=None, accept_sparse=False, force_all_finite='allow-nan', reset=reset
+        )
+        # MISSINGVALUES pandas.CategoricalDtype encodes np.nan as -1
+        # check_non_negative(X, "CategoricalNB (input X)")
+        return X, y
+
+    def _init_counters(self, n_classes, n_features):
+        # MISSINGVALUES - change class_count_ into a 2D array
+        self.class_count_ = np.zeros(n_classes, dtype=np.float64)
+        self.category_count_ = [np.zeros((n_classes, 0)) for _ in range(n_features)]
+
+    @staticmethod
+    def _validate_n_categories(X, min_categories):
+        # rely on max for n_categories categories are encoded between 0...n-1
+        # MISSINGVALUES - changed np.max to np.nanmax
+        n_categories_X = np.nanmax(X, axis=0) + 1
+        min_categories_ = np.array(min_categories)
+        if min_categories is not None:
+            if not np.issubdtype(min_categories_.dtype, np.signedinteger):
+                raise ValueError(
+                    "'min_categories' should have integral type. Got "
+                    f"{min_categories_.dtype} instead."
+                )
+            n_categories_ = np.maximum(n_categories_X, min_categories_, dtype=np.int64)
+            if n_categories_.shape != n_categories_X.shape:
+                raise ValueError(
+                    f"'min_categories' should have shape ({X.shape[1]},"
+                    ") when an array-like is provided. Got"
+                    f" {min_categories_.shape} instead."
+                )
+            return n_categories_
+        else:
+            return n_categories_X
+
+    def _count(self, X, Y):
+        def _update_cat_count_dims(cat_count, highest_feature):
+            # MISSINGVALUES - cast to int
+            diff = int(highest_feature + 1 - cat_count.shape[1])
+            if diff > 0:
+                # we append a column full of zeros for each new category
+                return np.pad(cat_count, [(0, 0), (0, diff)], "constant")
+            return cat_count
+
+        def _update_cat_count(X_feature, Y, cat_count, n_classes):
+            for j in range(n_classes):
+                mask = Y[:, j].astype(bool)
+                # MISSINGVALUES - mask to preserve just valid values
+                mask &= ~np.isnan(X_feature)
+                mask &= X_feature >= 0
+                if Y.dtype.type == np.int64:
+                    weights = None
+                else:
+                    weights = Y[mask, j]
+                # MISSINGVALUES - cast to int
+                counts = np.bincount(X_feature[mask].astype('int'), weights=weights)
+                indices = np.nonzero(counts)[0]
+                cat_count[j, indices] += counts[indices]
+
+        self.class_count_ += Y.sum(axis=0)
+        self.n_categories_ = self._validate_n_categories(X, self.min_categories)
+        for i in range(self.n_features_in_):
+            X_feature = X[:, i]
+            self.category_count_[i] = _update_cat_count_dims(
+                self.category_count_[i], self.n_categories_[i] - 1
+            )
+            _update_cat_count(
+                X_feature, Y, self.category_count_[i], self.class_count_.shape[0]
+            )

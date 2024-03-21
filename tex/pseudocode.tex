@@ -1,0 +1,95 @@
+\documentclass{article}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{xfrac}
+\usepackage{xcolor}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{bm}
+
+\algrenewcomment[1]{\hfill// #1}
+
+\begin{document}
+
+\section{Proposed Approach}
+
+Consider two datasets: $\mathcal{D}^a = \{ (\bm{X}^a, \bm{y}^b) \}$ and $\mathcal{D}^b = \{\bm{X}^b\}$, where only $\mathcal{D}^a$ was labeled. Both $\bm{X}^a$ and $\bm{X}^b$ represent feature vectors in the same space $(\mathbb{R}^m)$ and may have different sizes in terms of the number of instances. From $\mathcal{D}^a$, we trained a model, an ensemble  of \textit{na\"ive} Bayes, to evaluate the importance of attributes in $\bm{X}^a$. The same model predicts labels for $\bm{X}^b$, and the predicted labels ($\widehat{\bm{y}}^b$) are then utilized to evaluate the importance of features in $\mathcal{D}^b$.
+
+For testing purposes, we utilized $\mathcal{D}^b$ with known labels. However, it's important to note that the models did not have access to $\bm{y}^b$ during the training phase. This information was solely used in the production of the method's quality measure ($\Delta_{acc}$).
+
+The model could provide two feature importance measures. They were named Difference Between Conditional Probabilities (DBCP) and Minimal Sufficient Set (MSSF) \cite{maia2023}, and were employed to compute four distinct strategies:
+
+\begin{enumerate}
+	\item $\textbf{DBCP}(\mathcal{D}^b)$: The DBCP method calculates the feature importances for $\mathcal{D}^b$.
+	\item $\textbf{DBCP}(\mathcal{D}^b)-\textbf{DBCP}(\mathcal{D}^a)$: This strategy calculates the difference in DBCP feature importances between $\mathcal{D}^b$ and $\mathcal{D}^a$.
+	\item $\textbf{MSS}(\mathcal{D}^b)$: The MSS method calculates the feature importances for $\mathcal{D}^b$.
+	\item $\textbf{MSS}(\mathcal{D}^b)-\textbf{MSS}(\mathcal{D}^a)$: This strategy calculates the difference in MSS feature importances between $\mathcal{D}^b$ and $\mathcal{D}^a$.
+\end{enumerate}
+
+The result of each strategy was min-max normalized to ensure values are between 0 and 1. The normalized values are then transformed into probability distributions by dividing each element by the sum of the absolute values of the same vector, following the L1 normalization. Each resulting probability distribution ($\bm{\Lambda}_{k}$), where $k$ represents a specific strategy, satisfies $\sum_{j =1}^{m}\Lambda_{kj}=1, \quad \forall k \in \{1,2,3,4\}$. These distributions are then utilized as bias vectors in a Biased Random Subspace model.
+
+\begin{algorithm}
+	\caption{}
+	\begin{algorithmic}[1]
+		\Function{DbcpFromDb}{$\bm{X}^a,\bm{y}^a,\bm{X}^b$}
+		\State \Call{ModelA.Train}{$\bm{X}^a,\bm{y}^a$}
+		\State $\widehat{\bm{y}}^b \gets \Call{ModelA.Predict}{\mathcal{X}^b}$
+		\State \Call{ModelB.Train}{$\bm{X}^b,\widehat{\bm{y}}^b$}
+		\State $\bm{w} \gets \Call{ModelB.FeatureImportances}{\ }$
+		\State \Return $\bm{w}$
+		\EndFunction
+	\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+	\caption{}
+	\begin{algorithmic}[1]
+		\Function{DbcpFromDb-DbcpFromDa}{$\bm{X}^a,\bm{y}^a,\bm{X}^b$}
+		\State \Call{ModelA.Train}{$\bm{X}^a,\bm{y}^a$}
+		\State $\widehat{\bm{y}}^b \gets \Call{ModelA.Predict}{\mathcal{X}^b}$
+		\State \Call{ModelB.Train}{$\bm{X}^b,\widehat{\bm{y}}^b$}
+		\State $\textbf{DBCP}^a \gets$ \Call{ModelA.FeatureImportances}{\ }
+		\State $\textbf{DBCP}^b \gets$ \Call{ModelB.FeatureImportances}{\ }
+		\State $\bm{w} \gets \textbf{DBCP}^b - \textbf{DBCP}^a$
+		\State \Return $\bm{w}$
+		\EndFunction
+	\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+	\caption{}
+	\begin{algorithmic}[1]
+		\Function{MssFromDb}{$\bm{X}^a,\bm{y}^a,\bm{X}^b$}
+		\State \Call{ModelA.Train}{$\bm{X}^a,\bm{y}^a$}
+		\State $\bm{w} \gets$ \Call{ModelA.MinimalSufficientSet}{$\bm{X}^b$}
+		\State \Return $\bm{w}$
+		\EndFunction
+	\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+	\caption{}
+	\begin{algorithmic}[1]
+		\Function{MssFromDb-MssFromDa}{$\bm{X}^a,\bm{y}^a,\bm{X}^b$}
+		\State \Call{ModelA.Train}{$\bm{X}^a,\bm{y}^a$}
+		\State $\textbf{MSS}^a \gets$ \Call{ModelA.MinimalSufficientSet}{$\bm{X}^a$}
+		\State $\textbf{MSS}^b \gets$ \Call{ModelA.MinimalSufficientSet}{$\bm{X}^b$}
+		\State $\bm{w} \gets \textbf{MSS}^b - \textbf{MSS}^a$
+		\State \Return $\bm{w}$
+		\EndFunction
+	\end{algorithmic}
+\end{algorithm}
+
+\begin{algorithm}
+	\caption{}
+	\begin{algorithmic}[1]
+		\Function{ModelAdaptation\_BRS}{$\bm{X}^a,\bm{y}^a,\bm{X}^b, \textsc{FeatImp}()$}
+		\State $\bm{w} \gets \Call{FeatImp}{\bm{X}^a,\bm{y}^a,\bm{X}^b} $
+		\State $\bm{v} \gets \Call{MinMaxNormalization}{\bm{w}}$ \Comment{}
+		\State $\bm{p} \gets \dfrac{\bm{v}}{\big\Vert\bm{v}\big\Vert_1}$ \Comment{return a probability vector}
+		\State \textsc{AdaptedModel}() $\gets \Call{TrainAdaptedModel}{\bm{X}^a,\bm{y}^a, \bm{p}}$
+		\State \Return \textsc{AdaptedModel}()
+		\EndFunction
+	\end{algorithmic}
+\end{algorithm}
+\end{document}

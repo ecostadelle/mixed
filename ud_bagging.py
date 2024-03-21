@@ -7,14 +7,14 @@ import numbers
 from warnings import warn
 
 import numpy as np
-from joblib import Parallel
+# from joblib import Parallel
 from pandas import DataFrame
 from scipy.stats import entropy
 
 from sklearn.ensemble._bagging import _generate_indices, BaggingClassifier, MAX_INT
 from sklearn.ensemble._base import _partition_estimators
 from sklearn.utils import check_random_state, indices_to_mask, check_array
-from sklearn.utils.fixes import delayed
+from sklearn.utils.parallel import Parallel, delayed
 from sklearn.utils.validation import has_fit_parameter, _deprecate_positional_args, _check_sample_weight, \
     check_is_fitted
 
@@ -57,7 +57,7 @@ def parallel_build_estimators(n_estimators, ensemble, X, y, sample_weight,
     max_samples = ensemble._max_samples
     bootstrap = ensemble.bootstrap
     bootstrap_features = ensemble.bootstrap_features
-    support_sample_weight = has_fit_parameter(ensemble.base_estimator_,
+    support_sample_weight = has_fit_parameter(ensemble.estimator_,
                                               "sample_weight")
     if not support_sample_weight and sample_weight is not None:
         raise ValueError("The base estimator doesn't support sample weight")
@@ -117,6 +117,10 @@ def parallel_compute_feature_importances(estimators, estimators_features, n_feat
             importances[features] += estimator.sufficiency_based_feature_importances(X.iloc[:, features]
                                                                                      if isinstance(X, DataFrame)
                                                                                      else X[:, features])
+        if not sufficiency_based and X is not None:
+            importances[features] += estimator._dbcp(X.iloc[:, features]
+                                                     if isinstance(X, DataFrame)
+                                                     else X[:, features])
         else:
             importances[features] += estimator.feature_importances_
 
@@ -212,6 +216,22 @@ def my_parallel_predict_proba(estimators, estimators_features, X, n_classes):
 
     return proba
 
+def balanced_weight_vector(y: np.ndarray) -> np.ndarray:
+    error = ValueError("y must be a 1D numpy array")
+    try:
+        if y.ndim == 1:
+            classes, freq = np.unique(y, return_counts=True)
+            maj_index = freq.argmax()
+            maj_class = classes[maj_index]
+            maj_weight = freq.min()/freq.max()
+            min_weight = 1
+            return np.array([maj_weight if y_j == maj_class else min_weight for y_j in y])
+        else:
+            raise error
+    
+    except:
+        raise error
+
 class InterpretableBaggingClassifier(BaggingClassifier):
 
     @property
@@ -227,13 +247,35 @@ class InterpretableBaggingClassifier(BaggingClassifier):
             delayed(parallel_compute_feature_importances)(
                 self.estimators_[starts[i]:starts[i + 1]],
                 self.estimators_features_[starts[i]:starts[i + 1]],
-                self.n_features_)
+                self.n_features_in_)
             for i in range(n_jobs))
 
         # Reduce
         importances = sum(all_importances) / self.n_estimators
 
         return importances / np.sum(importances)
+
+    def _dbcp(self, X):
+        check_is_fitted(self)
+
+        # Parallel loop
+        n_jobs, n_estimators, starts = _partition_estimators(self.n_estimators,
+                                                             self.n_jobs)
+
+        all_importances = Parallel(n_jobs=n_jobs, verbose=self.verbose,
+                                   **self._parallel_args())(
+            delayed(parallel_compute_feature_importances)(
+                self.estimators_[starts[i]:starts[i + 1]],
+                self.estimators_features_[starts[i]:starts[i + 1]],
+                self.n_features_in_,
+                sufficiency_based=False,
+                X=X)
+            for i in range(n_jobs))
+
+        # Reduce
+        importances = sum(all_importances) / self.n_estimators
+
+        return importances
 
     def sufficiency_based_feature_importances(self, X):
         check_is_fitted(self)
@@ -247,7 +289,7 @@ class InterpretableBaggingClassifier(BaggingClassifier):
             delayed(parallel_compute_feature_importances)(
                 self.estimators_[starts[i]:starts[i + 1]],
                 self.estimators_features_[starts[i]:starts[i + 1]],
-                self.n_features_,
+                self.n_features_in_,
                 sufficiency_based=True,
                 X=X)
             for i in range(n_jobs))
@@ -309,11 +351,11 @@ class InterpretableBaggingClassifier(BaggingClassifier):
             force_all_finite=False
         )
 
-        if self.n_features_ != X.shape[1]:
+        if self.n_features_in_ != X.shape[1]:
             raise ValueError("Number of features of the model must "
                              "match the input. Model n_features is {0} and "
                              "input n_features is {1}."
-                             "".format(self.n_features_, X.shape[1]))
+                             "".format(self.n_features_in_, X.shape[1]))
 
         # Parallel loop
         n_jobs, n_estimators, starts = _partition_estimators(self.n_estimators,
@@ -337,7 +379,7 @@ class UDBaggingClassifier(InterpretableBaggingClassifier):
     @_deprecate_positional_args
     def __init__(self,
                  feature_bias=None,
-                 base_estimator=None,
+                 estimator=None,
                  n_estimators=10, *,
                  max_samples=1.0,
                  max_features=1.0,
@@ -353,7 +395,7 @@ class UDBaggingClassifier(InterpretableBaggingClassifier):
                  biased_subspaces=False,
                  default_feature_uncertainty=False):
         super().__init__(
-            base_estimator,
+            estimator,
             n_estimators=n_estimators,
             max_samples=max_samples,
             max_features=max_features,
@@ -390,7 +432,7 @@ class UDBaggingClassifier(InterpretableBaggingClassifier):
         self._validate_estimator()
 
         if max_depth is not None:
-            self.base_estimator_.max_depth = max_depth
+            self.estimator_.max_depth = max_depth
 
         # Validate max_samples
         if max_samples is None:
@@ -408,21 +450,16 @@ class UDBaggingClassifier(InterpretableBaggingClassifier):
         if isinstance(self.max_features, numbers.Integral):
             max_features = self.max_features
         elif isinstance(self.max_features, float):
-            max_features = self.max_features * self.n_features_
+            max_features = self.max_features * self.n_features_in_
         elif self.max_features == "sqrt":
-            max_features = np.sqrt(self.n_features_).astype(int)
+            max_features = np.sqrt(self.n_features_in_)
         elif self.max_features == "log2":
-            max_features = np.log2(self.n_features_).astype(int)
+            max_features = np.log2(self.n_features_in_)
         else:
-            raise ValueError("max_features must be int, float, 'sqrt' or 'log2'")
-
-        if not (0 < max_features <= self.n_features_):
-            raise ValueError("max_features must be in (0, n_features]")
-
-        max_features = max(1, int(max_features))
+            max_features = self.n_features_in_
 
         # Store validated integer feature sampling value
-        self._max_features = max_features
+        self._max_features = max(1, int(max_features))
 
         # Other checks
         if not self.bootstrap and self.oob_score:
@@ -467,10 +504,10 @@ class UDBaggingClassifier(InterpretableBaggingClassifier):
         self._seeds = seeds
 
         if self.uncertain_features is None:
-            self.uncertain_features = np.full((self.n_features_,), self.default_feature_uncertainty)
-        elif self.n_features_ > self.uncertain_features.shape[0]:
+            self.uncertain_features = np.full((self.n_features_in_,), self.default_feature_uncertainty)
+        elif self.n_features_in_ > self.uncertain_features.shape[0]:
             self.uncertain_features = np.append(self.uncertain_features, np.full(
-                                                                (self.n_features_ - self.uncertain_features.shape[0],),
+                                                                (self.n_features_in_ - self.uncertain_features.shape[0],),
                                                                 self.default_feature_uncertainty))
 
         sample_bias = None

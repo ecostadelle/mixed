@@ -11,7 +11,8 @@ import numpy as np
 from pandas import DataFrame
 from scipy.stats import entropy
 
-from sklearn.ensemble._bagging import _generate_indices, BaggingClassifier, MAX_INT
+# from sklearn.ensemble._bagging import _generate_indices, BaggingClassifier, MAX_INT
+from _bagging import _generate_indices, BaggingClassifier, MAX_INT
 from sklearn.ensemble._base import _partition_estimators
 from sklearn.utils import check_random_state, indices_to_mask, check_array
 from sklearn.utils.parallel import Parallel, delayed
@@ -108,20 +109,29 @@ def parallel_build_estimators(n_estimators, ensemble, X, y, sample_weight,
     return estimators, estimators_features
 
 
-def parallel_compute_feature_importances(estimators, estimators_features, n_features, sufficiency_based=False, X=None):
+def parallel_compute_feature_importances(estimators, estimators_features, n_features, sufficiency_based=False, X=None, verbose=0):
     """Private function used to compute feature importances within a job."""
     importances = np.zeros((n_features,))
 
-    for estimator, features in zip(estimators, estimators_features):
+    for i,(estimator, features) in enumerate(zip(estimators, estimators_features)):
         if sufficiency_based and X is not None:
+            if verbose > 1:
+                print("Importance for estimator %d of %d for this parallel run "
+                      % (i + 1, len(estimators)))
             importances[features] += estimator.sufficiency_based_feature_importances(X.iloc[:, features]
                                                                                      if isinstance(X, DataFrame)
                                                                                      else X[:, features])
         if not sufficiency_based and X is not None:
+            if verbose > 1:
+                print("Importance for estimator %d of %d for this parallel run "
+                      % (i + 1, len(estimators)))
             importances[features] += estimator._dbcp(X.iloc[:, features]
                                                      if isinstance(X, DataFrame)
                                                      else X[:, features])
         else:
+            if verbose > 1:
+                print("Importance for estimator %d of %d for this parallel run "
+                      % (i + 1, len(estimators)))
             importances[features] += estimator.feature_importances_
 
     return importances
@@ -247,7 +257,7 @@ class InterpretableBaggingClassifier(BaggingClassifier):
             delayed(parallel_compute_feature_importances)(
                 self.estimators_[starts[i]:starts[i + 1]],
                 self.estimators_features_[starts[i]:starts[i + 1]],
-                self.n_features_in_)
+                self.n_features_in_, verbose = self.verbose)
             for i in range(n_jobs))
 
         # Reduce
@@ -269,7 +279,7 @@ class InterpretableBaggingClassifier(BaggingClassifier):
                 self.estimators_features_[starts[i]:starts[i + 1]],
                 self.n_features_in_,
                 sufficiency_based=False,
-                X=X)
+                X=X, verbose = self.verbose)
             for i in range(n_jobs))
 
         # Reduce
@@ -291,7 +301,7 @@ class InterpretableBaggingClassifier(BaggingClassifier):
                 self.estimators_features_[starts[i]:starts[i + 1]],
                 self.n_features_in_,
                 sufficiency_based=True,
-                X=X)
+                X=X, verbose = self.verbose)
             for i in range(n_jobs))
 
         # Reduce

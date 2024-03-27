@@ -221,11 +221,10 @@ for dataset,identifier in data:
                 df_result['f-1'].loc[identifier,cols[i+3]] = f1_oodi
         
         c.print(f'{identifier}: {int(time.time() - time_)}')
-
         save_result(df_result)
-        c.print(df_result['f-1'])
+        # c.print(df_result['f-1'])
     except Exception as error:
         save_result(df_result)
-        c.print(df_result['f-1'])
-        c.print(error)
+        # c.print(df_result['f-1'])
+        c.print(f'{identifier}: {error}')
         pass

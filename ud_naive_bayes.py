@@ -471,7 +471,7 @@ class InterpretableCategoricalNB(CategoricalNB):
         X = self._check_X(X)
         y = self.predict(X)
         minimal_sufficient = self.supporting_features(X, y)
-        sorted_indices = np.argsort(self._dbcp(X).sum(axis=0))
+        sorted_indices = np.argsort(self._dbcp(X))
         for i in range(X.shape[0]):
             for j in sorted_indices:
                 if minimal_sufficient[i, j]:
@@ -489,7 +489,11 @@ class InterpretableCategoricalNB(CategoricalNB):
         n,m = X.shape
         for i in range(n):
             for j in range(m):
-                support_features[i, j] = np.argmax(self.feature_log_prob_[j][:,X[i, j]]) == y[i]
+                # MISSINGVALUES - compute supporting feature just for valid categories
+                if (X[i, j] >= 0) & (X[i, j] < self.n_categories_[j]):
+                    support_features[i, j] = np.argmax(self.feature_log_prob_[j][:,X[i, j]]) == y[i]
+            else:
+                support_features[i, j] = False
 
         return support_features
     
@@ -502,20 +506,20 @@ class InterpretableCategoricalNB(CategoricalNB):
         n,m = X.shape
         if isinstance(X, pd.DataFrame):
             X = X.values
-        importances = np.zeros((n,m))
+        importances = np.zeros(m)
         for j in range(m):
             Xj = X[:, j].astype(int)
             p = np.exp(self.feature_log_prob_[j])
             # MISSINGVALUES - compute importance just for valid categories
-            valid = (Xj >= 0).astype(int)
-            importances[:,j] += np.abs(p[0] - p[1])[Xj]*valid
+            Xj = Xj[(Xj >= 0) & (Xj < self.n_categories_[j])]
+            importances[j] = (np.abs(p[0] - p[1])[Xj]).sum()
         if normalize:
             normalizer = np.sum(importances)
 
             if normalizer > 0.0:
                 importances /= normalizer
 
-        return importances.sum(axis=0)
+        return importances
 
     def _joint_log_likelihood(self, X):
         self._check_n_features(X, reset=False)
@@ -544,7 +548,13 @@ class InterpretableCategoricalNB(CategoricalNB):
 
         jll = np.zeros(self.class_count_.shape[0])
         for j in range(m):
-            jll += feature_log_prob[j][:, X[j]]
+            # MISSINGVALUES - compute jll just for valid categories
+            Xj = X[j]
+            if (Xj >= 0) & (Xj < self.n_categories_[j]):
+                try:
+                    jll += feature_log_prob[j][:, Xj]
+                except:
+                    pass
             jll += self.class_log_prior_
         return jll
 
